@@ -557,20 +557,47 @@ function createWordEndHandler(
 ): (vimState: HelixState, editor: vscode.TextEditor) => void {
   return (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      const lineText = document.lineAt(position.line).text;
-      const ranges = wordRangesFunction(lineText);
+      let character = position.character;
+      let lineOffset = 0;
+      let lineText = '';
 
-      const result = ranges.find((x) => x.end > position.character);
-
-      if (result) {
-        const onWordEnd = ranges.find((x) => x.end == position.character);
-
-        const currentPos = onWordEnd ? position.with({ character: position.character + 1 }) : position;
-
-        return new MotionResult(position.with({ character: result.end }), currentPos);
-      } else {
-        return new MotionResult(position, position);
+      // as long as at end of line or empty goto next one (e.g finds next relevant line)
+      for (let i = 0; i <= document.lineCount - position.line; i++) {
+        lineText = document.lineAt(position.line + lineOffset).text;
+        if (character < lineText.length - 1) break;
+        // if just jumped to line that is not empty (e.g. has a space or tab) stay on it
+        if (lineOffset > 0 && lineText.length > 0) break;
+        // else go to next line
+        lineOffset++;
+        character = 0;
       }
+
+      const ranges = wordRangesFunction(lineText);
+      let nextChar = character;
+      let prevChar = nextChar;
+
+      for (let value of ranges) {
+        // if cursor was on end of wordblock and hasn't been changed yet move one to right
+        // this way the selection does not include the last letter of the previous wordblock
+        if (prevChar == value.end && prevChar == character) {
+          prevChar++;
+          continue;
+        }
+        if (value.end > nextChar) {
+          nextChar = value.end;
+          break;
+        }
+      }
+
+      if (nextChar == character) nextChar = lineText.length - 1;
+
+      const newLine = position.line + lineOffset;
+      // set cursor position and therefore end of selection
+      const nextPosition = position.with({ line: newLine, character: nextChar });
+      // set start of selection
+      const currentPosition = position.with({ line: newLine, character: prevChar });
+
+      return new MotionResult(nextPosition, currentPosition);
     });
   };
 }
