@@ -513,28 +513,41 @@ function createWordBackwardHandler(
   return (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
       let character = position.character;
-      // Try the current line and if we're at the end go to the next line
-      // This way we're only keeping one line of text in memory at a time
-      // i is representing the relative line number we're on from where we started
-      for (let i = position.line; i >= 0; i--) {
-        const lineText = document.lineAt(i).text;
-        const ranges = wordRangesFunction(lineText);
+      let lineOffset = 0;
+      let lineText = document.lineAt(position.line).text;
 
-        const result = ranges.reverse().find((x) => x.start < character);
-
-        if (result) {
-          const onWordStart = ranges.find((x) => x.start == position.character);
-
-          const currentPos = onWordStart ? position : position.with({ character: position.character });
-
-          return new MotionResult(position.with({ character: result.start, line: i }), currentPos);
-        }
-
-        // If we don't find anything on this line, search the next and reset the character to 0
-        character = Infinity;
+      // as long as at start of line goto end of next one (e.g finds next relevant line)
+      for (let i = 0; i <= position.line; i++) {
+        if (character != 0) break;
+        lineOffset--;
+        lineText = document.lineAt(position.line + lineOffset).text;
+        character = lineText.length;
       }
-      // We may be at the end of the document or nothing else matches
-      return new MotionResult(position, position);
+
+      // reverse so to start the lookup loop from the back
+      const ranges = wordRangesFunction(lineText).reverse();
+      let nextChar = character;
+      let prevChar = nextChar;
+
+      let foundWord = false;
+      for (let value of ranges) {
+        if (character > value.start) {
+          nextChar = value.start;
+          foundWord = true;
+          break;
+        }
+        prevChar = value.start;
+      }
+
+      if (!foundWord) nextChar = 0;
+
+      const newLine = position.line + lineOffset;
+      // set cursor position and therefore end of selection
+      const nextPosition = position.with({ line: newLine, character: nextChar });
+      // set start of selection
+      const currentPosition = position.with({ line: newLine, character: prevChar });
+
+      return new MotionResult(nextPosition, currentPosition);
     });
   };
 }
