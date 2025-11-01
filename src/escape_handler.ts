@@ -16,7 +16,6 @@ export function escapeHandler(vimState: HelixState): void {
   if (vimState.mode === Mode.Insert || vimState.mode === Mode.Occurrence) {
     editor.selections = editor.selections.map((selection) => {
       return new vscode.Selection(selection.active, selection.active);
-
     });
 
     enterNormalMode(vimState);
@@ -32,7 +31,7 @@ export function escapeHandler(vimState: HelixState): void {
     vscode.commands.executeCommand('closeFindWidget');
   } else if (vimState.mode === Mode.Visual) {
     editor.selections = editor.selections.map((selection) => {
-      const newPosition = new vscode.Position(selection.active.line, Math.max(selection.active.character - 1, 0));
+      const newPosition = new vscode.Position(selection.active.line, Math.max(selection.active.character, 0));
       return new vscode.Selection(newPosition, newPosition);
     });
 
@@ -42,7 +41,7 @@ export function escapeHandler(vimState: HelixState): void {
   } else if (vimState.mode === Mode.VisualLine) {
     editor.selections = editor.selections.map((selection) => {
       const newPosition = selection.active.with({
-        character: Math.max(selection.active.character - 1, 0),
+        character: Math.max(selection.active.character, 0),
       });
       return new vscode.Selection(newPosition, newPosition);
     });
