@@ -18,16 +18,30 @@ import { setVisualSelections } from '../visual_utils';
 import { whitespaceWordRanges, wordRanges } from '../word_utils';
 import KeyMap from './keymaps';
 
+class MotionResult {
+  readonly next: vscode.Position;
+  readonly current: vscode.Position | null;
+
+  constructor(next: vscode.Position, current: vscode.Position | null) {
+    this.next = next;
+    this.current = current;
+  }
+
+  static from(next: vscode.Position): MotionResult {
+    return new MotionResult(next, null);
+  }
+}
+
 export const motions: Action[] = [
   parseKeysExact([KeyMap.Motions.MoveRight], [Mode.Visual], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      return positionUtils.rightNormal(document, position, vimState.resolveCount());
+      return MotionResult.from(positionUtils.rightNormal(document, position, vimState.resolveCount()));
     });
   }),
 
   parseKeysExact([KeyMap.Motions.MoveLeft], [Mode.Visual], (vimState, editor) => {
     execMotion(vimState, editor, ({ position }) => {
-      return positionUtils.left(position, vimState.resolveCount());
+      return MotionResult.from(positionUtils.left(position, vimState.resolveCount()));
     });
   }),
 
@@ -169,41 +183,43 @@ export const motions: Action[] = [
 
   parseKeysExact(['}'], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      return new vscode.Position(paragraphForward(document, position.line), 0);
+      return MotionResult.from(new vscode.Position(paragraphForward(document, position.line), 0));
     });
   }),
 
   parseKeysExact([']', 'p'], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      return new vscode.Position(paragraphForward(document, position.line), 0);
+      return MotionResult.from(new vscode.Position(paragraphForward(document, position.line), 0));
     });
   }),
 
   parseKeysExact(['{'], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      return new vscode.Position(paragraphBackward(document, position.line), 0);
+      return MotionResult.from(new vscode.Position(paragraphBackward(document, position.line), 0));
     });
   }),
 
   parseKeysExact(['[', 'p'], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
-      return new vscode.Position(paragraphBackward(document, position.line), 0);
+      return MotionResult.from(new vscode.Position(paragraphBackward(document, position.line), 0));
     });
   }),
 
   parseKeysExact([KeyMap.Motions.MoveLineEnd], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
       const lineLength = document.lineAt(position.line).text.length;
-      return position.with({ character: Math.max(lineLength - 1, 0) });
+      return MotionResult.from(position.with({ character: Math.max(lineLength - 1, 0) }));
     });
   }),
 
   parseKeysExact([KeyMap.Motions.MoveLineStart], [Mode.Normal, Mode.Visual, Mode.VisualLine], (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
       const line = document.lineAt(position.line);
-      return position.with({
-        character: line.firstNonWhitespaceCharacterIndex,
-      });
+      return MotionResult.from(
+        position.with({
+          character: line.firstNonWhitespaceCharacterIndex,
+        }),
+      );
     });
   }),
 
@@ -323,45 +339,47 @@ function execRegexMotion(
   regexMotion: (args: RegexMotionArgs) => vscode.Position,
 ) {
   return execMotion(vimState, editor, (motionArgs) => {
-    return regexMotion({
-      ...motionArgs,
-      match: match,
-    });
+    return MotionResult.from(
+      regexMotion({
+        ...motionArgs,
+        match: match,
+      }),
+    );
   });
 }
 
-function execMotion(vimState: HelixState, editor: vscode.TextEditor, motion: (args: MotionArgs) => vscode.Position) {
+function execMotion(vimState: HelixState, editor: vscode.TextEditor, motion: (args: MotionArgs) => MotionResult) {
   const document = editor.document;
 
   const newSelections = editor.selections.map((selection, i) => {
     if (vimState.mode === Mode.Normal) {
-      const newPosition = motion({
+      const result = motion({
         document: document,
         position: selection.active,
         selectionIndex: i,
         vimState: vimState,
       });
-      return new vscode.Selection(selection.active, newPosition);
+      return new vscode.Selection(result.current!, result.next);
     } else if (vimState.mode === Mode.Visual) {
       const vimSelection = vscodeToVimVisualSelection(document, selection);
-      const motionPosition = motion({
+      const result = motion({
         document: document,
         position: vimSelection.active,
         selectionIndex: i,
         vimState: vimState,
       });
 
-      return vimToVscodeVisualSelection(document, new vscode.Selection(vimSelection.anchor, motionPosition));
+      return vimToVscodeVisualSelection(document, new vscode.Selection(vimSelection.anchor, result.next));
     } else if (vimState.mode === Mode.VisualLine) {
       const vimSelection = vscodeToVimVisualLineSelection(document, selection);
-      const motionPosition = motion({
+      const result = motion({
         document: document,
         position: vimSelection.active,
         selectionIndex: i,
         vimState: vimState,
       });
 
-      return vimToVscodeVisualLineSelection(document, new vscode.Selection(vimSelection.anchor, motionPosition));
+      return vimToVscodeVisualLineSelection(document, new vscode.Selection(vimSelection.anchor, result.next));
     } else {
       return selection;
     }
@@ -446,28 +464,45 @@ function createWordForwardHandler(
   return (vimState, editor) => {
     execMotion(vimState, editor, ({ document, position }) => {
       let character = position.character;
-      // Try the current line and if we're at the end go to the next line
-      // This way we're only keeping one line of text in memory at a time
-      // i is representing the relative line number we're on from where we started
-      for (let i = 0; i < document.lineCount; i++) {
-        const lineText = document.lineAt(position.line + i).text;
-        const ranges = wordRangesFunction(lineText);
+      let lineOffset = 0;
+      let lineText = '';
 
-        const result = ranges.find((x) => x.start > character);
-
-        if (result) {
-          if (vimState.mode === Mode.Normal) {
-            return position.with({ character: result.start, line: position.line + i });
-          } else {
-            return position.with({ character: result.start-1, line: position.line + i });
-          }
-        }
-        // If we don't find anything on this line, search the next and reset the character to 0
+      // as long as at end of line or empty goto next one (e.g finds next relevant line)
+      for (let i = 0; i <= document.lineCount - position.line; i++) {
+        lineText = document.lineAt(position.line + lineOffset).text;
+        if (character < lineText.length - 1) break;
+        // if just jumped to line that is not empty (e.g. has a space or tab) stay on it
+        if (lineOffset > 0 && lineText.length > 0) break;
+        // else go to next line
+        lineOffset++;
         character = 0;
       }
 
-      // We may be at the end of the document or nothing else matches
-      return position;
+      const ranges = wordRangesFunction(lineText);
+      let nextChar = character;
+      let prevChar = nextChar;
+
+      let foundWord = false;
+      for (let value of ranges) {
+        // if character is at start of line after jumping to next line,
+        // and first word is one space or tab away stay there
+        if (character < value.start - 1 || (character == 0 && lineOffset > 0)) {
+          nextChar = value.start - 1;
+          foundWord = true;
+          break;
+        }
+        prevChar = value.start;
+      }
+
+      if (!foundWord) nextChar = lineText.length - 1;
+
+      const newLine = position.line + lineOffset;
+      // set cursor position and therefore end of selection
+      const nextPosition = position.with({ line: newLine, character: nextChar });
+      // set start of selection
+      const currentPosition = position.with({ line: newLine, character: prevChar });
+
+      return new MotionResult(nextPosition, currentPosition);
     });
   };
 }
@@ -488,14 +523,18 @@ function createWordBackwardHandler(
         const result = ranges.reverse().find((x) => x.start < character);
 
         if (result) {
-          return position.with({ character: result.start, line: i });
+          const onWordStart = ranges.find((x) => x.start == position.character);
+
+          const currentPos = onWordStart ? position : position.with({ character: position.character });
+
+          return new MotionResult(position.with({ character: result.start, line: i }), currentPos);
         }
 
         // If we don't find anything on this line, search the next and reset the character to 0
         character = Infinity;
       }
       // We may be at the end of the document or nothing else matches
-      return position;
+      return new MotionResult(position, position);
     });
   };
 }
@@ -511,13 +550,13 @@ function createWordEndHandler(
       const result = ranges.find((x) => x.end > position.character);
 
       if (result) {
-        if (vimState.mode === Mode.Normal) {
-          return position.with({ character: result.end + 1 });
-        } else {
-          return position.with({ character: result.end });
-        }
+        const onWordEnd = ranges.find((x) => x.end == position.character);
+
+        const currentPos = onWordEnd ? position.with({ character: position.character + 1 }) : position;
+
+        return new MotionResult(position.with({ character: result.end }), currentPos);
       } else {
-        return position;
+        return new MotionResult(position, position);
       }
     });
   };
